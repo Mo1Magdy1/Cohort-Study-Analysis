@@ -1,0 +1,95 @@
+# ---- Libraries ----
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+
+# ---- Load CSV ----
+diabetes_data = pd.read_csv(r"C:\Users\alreada\Desktop\El futuro\DATASETs\diabetes.csv")
+
+# ---- View first 10 rows ----
+print(diabetes_data.head(10))
+
+# ---- Statistical Summary (n, mean, std, min, max) ----
+desc = diabetes_data[['Pregnancies','Insulin','Glucose','DiabetesPedigreeFunction','DBP','BMI','Age','SkinThickness']].agg(
+    ['count','mean','std','min','max']
+)
+print(desc)
+
+# ---- Logistic Regression (statsmodels for ORs) ----
+X = diabetes_data[['Age','BMI','DBP','DiabetesPedigreeFunction','Glucose','Insulin','Pregnancies']]
+y = diabetes_data['Outcome']
+
+X_const = sm.add_constant(X)
+logit_model = sm.Logit(y, X_const).fit()
+print(logit_model.summary())
+
+# ---- Odds Ratios ----
+ORs = pd.DataFrame({
+    "OR": np.exp(logit_model.params),
+    "2.5%": np.exp(logit_model.conf_int()[0]),
+    "97.5%": np.exp(logit_model.conf_int()[1])
+})
+print(ORs)
+
+# ---- ROC Curve ----
+y_pred_prob = logit_model.predict(X_const)
+fpr, tpr, thresholds = roc_curve(y, y_pred_prob)
+plt.plot(fpr, tpr, label="ROC Curve")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC Curve")
+plt.show()
+print("AUC:", roc_auc_score(y, y_pred_prob))
+
+# ---- Stratify Age into Groups ----
+def age_group(age):
+    if age < 30: return "1. <30"
+    elif 30 <= age < 40: return "2. 30-39"
+    elif 40 <= age < 50: return "3. 40-49"
+    elif 50 <= age < 60: return "4. 50-59"
+    else: return "5. 60+"
+
+diabetes_data['AgeGroup'] = diabetes_data['Age'].apply(age_group)
+
+# ---- Train/Test Split (70/30) ----
+train, test = train_test_split(diabetes_data, test_size=0.3, random_state=12345, stratify=diabetes_data['Outcome'])
+
+# ---- Logistic Regression with AgeGroup (using get_dummies for categorical) ----
+X_train = pd.get_dummies(train[['Pregnancies','Glucose','DBP','SkinThickness','Insulin','BMI','DiabetesPedigreeFunction','AgeGroup']], drop_first=True)
+y_train = train['Outcome']
+X_test = pd.get_dummies(test[['Pregnancies','Glucose','DBP','SkinThickness','Insulin','BMI','DiabetesPedigreeFunction','AgeGroup']], drop_first=True)
+y_test = test['Outcome']
+
+train_model = LogisticRegression(max_iter=1000)
+train_model.fit(X_train, y_train)
+
+# ---- Predict on Test Set & ROC ----
+y_test_prob = train_model.predict_proba(X_test)[:,1]
+fpr, tpr, thresholds = roc_curve(y_test, y_test_prob)
+plt.plot(fpr, tpr, label="Test ROC Curve")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Test ROC Curve")
+plt.show()
+print("Test AUC:", roc_auc_score(y_test, y_test_prob))
+
+# ---- Convert Probability to Binary Outcome ----
+y_pred = (y_test_prob >= 0.5).astype(int)
+
+# ---- Confusion Matrix & Metrics ----
+cm = confusion_matrix(y_test, y_pred)
+TP = cm[1,1]
+TN = cm[0,0]
+FP = cm[0,1]
+FN = cm[1,0]
+
+Accuracy = (TP + TN) / (TP + TN + FP + FN)
+Sensitivity = TP / (TP + FN)
+Specificity = TN / (TN + FP)
+
+metrics = pd.DataFrame({'Accuracy':[Accuracy],'Sensitivity':[Sensitivity],'Specificity':[Specificity]})
+print(metrics)
