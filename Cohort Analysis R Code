@@ -1,0 +1,84 @@
+# ---- Libraries ----
+library(tidyverse)
+library(caret)
+library(pROC)
+library(broom)
+
+# ---- Load CSV ----
+diabetes_data <- read.csv("C:/Users/alreada/Desktop/El futuro/DATASETs/diabetes.csv")
+
+# ---- View first 10 rows ----
+head(diabetes_data, 10)
+
+# ---- Statistical Summary (n, mean, sd, min, max) ----
+summary_stats <- diabetes_data %>%
+  select(Pregnancies, Insulin, Glucose, DiabetesPedigreeFunction, DBP, BMI, Age, SkinThickness) %>%
+  summarise_all(list(
+    N = ~sum(!is.na(.)),
+    Mean = ~mean(., na.rm = TRUE),
+    SD = ~sd(., na.rm = TRUE),
+    Min = ~min(., na.rm = TRUE),
+    Max = ~max(., na.rm = TRUE)
+  ))
+summary_stats
+
+# ---- Logistic Regression ----
+logit_model <- glm(Outcome ~ Age + BMI + DBP + DiabetesPedigreeFunction + Glucose + Insulin + Pregnancies,
+                   data = diabetes_data, family = binomial)
+
+summary(logit_model)
+
+# ---- Odds Ratios ----
+exp(cbind(OR = coef(logit_model), confint(logit_model)))
+
+# ---- ROC Curve ----
+roc_curve <- roc(diabetes_data$Outcome, predict(logit_model, type = "response"))
+plot(roc_curve, main="ROC Curve")
+auc(roc_curve)
+
+# ---- Stratify Age ----
+diabetes_data <- diabetes_data %>%
+  mutate(AgeGroup = case_when(
+    Age < 30 ~ "1. <30",
+    Age >= 30 & Age < 40 ~ "2. 30-39",
+    Age >= 40 & Age < 50 ~ "3. 40-49",
+    Age >= 50 & Age < 60 ~ "4. 50-59",
+    TRUE ~ "5. 60+"
+  ))
+
+# ---- Train/Test Split (70/30) ----
+set.seed(12345)
+train_index <- createDataPartition(diabetes_data$Outcome, p = 0.7, list = FALSE)
+train <- diabetes_data[train_index, ]
+test <- diabetes_data[-train_index, ]
+
+# ---- Logistic Regression with AgeGroup ----
+train_model <- glm(Outcome ~ Pregnancies + Glucose + DBP + SkinThickness + Insulin + BMI + DiabetesPedigreeFunction + AgeGroup,
+                   data = train, family = binomial)
+summary(train_model)
+
+# ---- Predict on Test Set ----
+test$pred_prob <- predict(train_model, newdata = test, type = "response")
+
+# ---- ROC & AUC on Test ----
+roc_test <- roc(test$Outcome, test$pred_prob)
+plot(roc_test, main="Test ROC Curve")
+auc(roc_test)
+
+# ---- Convert Probability to Binary Outcome ----
+test <- test %>%
+  mutate(Predicted_Outcome = ifelse(pred_prob >= 0.5, 1, 0))
+
+# ---- Confusion Matrix & Metrics ----
+conf_matrix <- table(test$Outcome, test$Predicted_Outcome)
+TP <- conf_matrix[2,2]
+TN <- conf_matrix[1,1]
+FP <- conf_matrix[1,2]
+FN <- conf_matrix[2,1]
+
+Accuracy <- (TP + TN) / (TP + TN + FP + FN)
+Sensitivity <- TP / (TP + FN)
+Specificity <- TN / (TN + FP)
+
+metrics <- data.frame(Accuracy=Accuracy, Sensitivity=Sensitivity, Specificity=Specificity)
+metrics
