@@ -1,0 +1,138 @@
+/* Load CSV */
+proc import datafile="/home/u63681137/diabetes.csv"
+	out=work.diabetes_data
+	dbms=csv
+	replace;
+	guessingrows=max;
+run;
+
+/* Viwe first 10 rows */
+proc print data=diabetes_data(obs=10);
+run;
+
+/* Statistical Summary */
+proc means data=diabetes_data n mean std min max;
+	var  Pregnancies Insulin Glucose DiabetesPedigreeFunction DBP BMI Age SkinThickness;
+run;
+
+/* Logistic Regression Model */
+proc logistic data=diabetes_data descending;
+	class  Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies / param=ref;
+	model  Outcome = Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies;
+
+run;
+
+/* ROC */
+proc logistic data=diabetes_data descending plots(only)=roc;
+	class  Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies / param=ref;
+	model  Outcome = Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies;
+run;
+
+/* Stratify Age to groups */
+data work.diabetes_prep;
+	set work.diabetes_data;
+
+	
+	if Age < 30 then AgeGroup = "1. <30";
+	else if 30 <= Age < 40 then AgeGroup = "2. 30-39";
+	else if 40 <= Age < 50 then AgeGroup = "3. 40-49";
+	else if 50 <= Age < 60 then AgeGroup = "4. 50-59";
+	else AgeGroup = "5. 60+";
+
+	
+	format AgeGroup $10.;
+run;
+
+/* Train/Test */
+proc surveyselect data=diabetes_prep out=diabetes_split
+	samprate=0.7 outall seed=12345;
+run;
+
+data train test;
+	set diabetes_split;
+	if selected = 1 then output train;
+	else output test;
+run;
+
+/* Multiple Regression */
+proc logistic data=train descending;
+	class AgeGroup (ref="1. <30") / param=ref;
+	model Outcome = Pregnancies Glucose DBP SkinThickness Insulin BMI DiabetesPedigreeFunction AgeGroup;
+run;
+
+/* ROC */
+proc logistic data=train descending;
+	class AgeGroup (ref="1. <30") / param=ref;
+	model Outcome = Pregnancies Glucose DBP SkinThickness Insulin BMI DiabetesPedigreeFunction AgeGroup;
+	score data=test out=predicted_roc;
+run;
+
+/* Odds Ratio */
+proc logistic data=diabetes_data descending;
+	model Outcome = Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies;
+	
+	oddsratio Age;
+	oddsratio BMI;
+	oddsratio DBP;
+	oddsratio DiabetesPedigreeFunction;
+	oddsratio Glucose;
+	oddsratio Insulin;
+	oddsratio Pregnancies;
+run;
+
+/* 1. Train Logistic Model */
+proc logistic data=diabetes_data descending;
+	model Outcome = Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies;
+	output out=pred_data p=pred_prob; /* p = احتمالية الإصابة */
+run;
+
+/* 2. Curve ROC */
+proc logistic data=diabetes_data descending plots(only)=roc(id=prob);
+	model Outcome = Age BMI DBP DiabetesPedigreeFunction Glucose Insulin Pregnancies;
+run;
+
+/* 3. Convert Probability in binary outcome */
+data predicted;
+	set pred_data;
+	if pred_prob >= 0.5 then Predicted_Outcome = 1;
+	else Predicted_Outcome = 0;
+run;
+
+/* 4. Confusion Matrix */
+proc freq data=predicted noprint;
+	tables Outcome*Predicted_Outcome / out=conf_matrix;
+run;
+
+/* 5. make confusion matrix analyzable */
+data perf_calc;
+	set conf_matrix;
+	length cell $20;
+	if Outcome=1 and Predicted_Outcome=1 then cell="TP";
+	else if Outcome=0 and Predicted_Outcome=1 then cell="FP";
+	else if Outcome=1 and Predicted_Outcome=0 then cell="FN";
+	else if Outcome=0 and Predicted_Outcome=0 then cell="TN";
+run;
+
+/* 6. Re-order data */
+proc transpose data=perf_calc out=perf_wide(drop=_NAME_);
+	id cell;
+	var COUNT;
+run;
+
+/* 7. Accuracy, Senstitivity, Specificity */
+data metrics;
+	set perf_wide;
+	Accuracy = (TP + TN) / (TP + TN + FP + FN);
+	Sensitivity = TP / (TP + FN);
+	Specificity = TN / (TN + FP);
+	format Accuracy Sensitivity Specificity percent8.2;
+run;
+
+/* 8. Print outcomes */
+proc print data=metrics label noobs;
+	var Accuracy Sensitivity Specificity;
+	label
+		Accuracy = "Accuracy "
+		Sensitivity = "Sensitivity "
+		Specificity = "Specificity ";
+run;
